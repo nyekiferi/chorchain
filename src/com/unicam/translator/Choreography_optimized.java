@@ -81,10 +81,12 @@ public class Choreography_optimized {
 			String a = " ";
 			String b = " ";
 			String buffer = choreography.FlowNodeSearch(optionalRoles, mandatoryRoles);
+			String buffer2 = choreography.FuncForOk(optionalRoles, mandatoryRoles);
 
 			a = a.concat(choreography.initial(bpmnFile.getName(), participants, optionalRoles, mandatoryRoles));
 			a = a.concat(buffer);
 			a = a.concat(choreography.lastFunctions());
+			a = a.concat(buffer2);
 
 			b = b.concat(fireflyBackend());
 
@@ -95,7 +97,7 @@ public class Choreography_optimized {
 			finalContract.setVarNames(choreography.getGatewayGuards());
 			finalContract.setTaskIdAndRole(choreography.getTaskIdAndRole());
 			choreography.fileSolidity(a, bpmnFile.getName());
-			choreography.fileFireFly(b, "index");
+			choreography.fileFireFly(b, bpmnFile.getName());
 			return finalContract;
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -139,9 +141,12 @@ public class Choreography_optimized {
 			"pragma solidity ^0.8.10;\n" + 
 			"// Declares a new contract\n" +
 			"contract " + ContractFunctions.parseName(filename, "") + "{\n" +
-			"	//#region " + "\"" + "Events" + "\"\n" +
-			"	event functionDone(string);\n" +
-			"	event messageMustSend(string);\n" +
+			"	//#region " + "\"" + "Events" + "\"\n";
+			for(Map.Entry<String, User> sub : participants.entrySet()){
+				intro += "	event messageMustSend" + sub.getKey() + "(address indexed from, string);\n";
+				intro += "	event tokenMustSend" + sub.getKey() + "(address indexed from, string);\n";
+			}
+		intro += 
 			"	//#endregion " + "\"" + "Events" + "\"\n" +
 			"	\n" +
 			"	enum State {DISABLED, ENABLED, DONE} State s; \n" +
@@ -151,19 +156,10 @@ public class Choreography_optimized {
 			"		string ID;\n" +
 			"		State status;\n" +
 			"	}\n" +
-			"	\n" +
-			"	struct StateMemory{\n";
-		for (String guard : gatewayGuards) {
-			intro += 
-				"		" + guard + ";\n";
-		}
-		intro += 
-			"	}\n" +
 			"	//#endregion " + "\"" + "Structs" + "\"\n" +
 			"	\n" +
 			"	Element["+(elementsID.size()+1)+"] elements;\n"	+ 
-			"	StateMemory currentMemory;\n" +
-			"	bool ok = false;\n" +
+			"	string start;\n" +
 			"	string["+mandatoryRoles.size()+"] roleList = [";
 		for (int i = 0; i < mandatoryRoles.size(); i++) {
 			intro += 
@@ -191,45 +187,32 @@ public class Choreography_optimized {
 
 		intro += 
 			"	mapping(string=>address) roles;\n" + "\n";
-		String constr = 
-			"	constructor() {\n" +
+		String startSC = 
+			"	function startSmartContract(string memory _state) public{\n" +
+			"		start = _state;\n" +
 			"		elements[" + taskIdInt.get(startEventAdd) + "] = Element(\""+ startEventAdd +"\", State.ENABLED);\n" +
 			"		\n" +
 			"		//roles definition\n";
 		for (Map.Entry<String, User> sub : participants.entrySet()) {
-			constr += 
+			startSC += 
 				"		roles[\"" + sub.getKey() + "\"] = " + sub.getValue().getAddress() + ";\n";
 		}
 		if(!optionalRoles.isEmpty()){
 			for (String optional : optionalRoles) {
-				constr += 
+				startSC += 
 					"	optionalRoles[\"" + optional + "\"] = 0x0000000000000000000000000000000000000000;";
 			}
 		}
-		constr += 
+		startSC += 
 			"		\n";
 
-		constr += 
+		startSC += 
 			"		//enable the start process\n" +
 			"		"+ startEventAdd +"();\n" +
-			"		emit functionDone(\"Contract creation\");\n" +
 			"	}\n" + 
 			"	\n";
 
 		String other = 
-			"	//#region " + "\"" + "Modifiers" + "\"" + "\n" +
-			"	modifier checkRole(string memory role){ \n" +
-			"		require(msg.sender == roles[role]";
-		if(!optionalRoles.isEmpty()){
-			other +=
-				" || msg.sender == optionalRoles[role]";
-		}
-		other += 
-			");\n" +
-			"		_;\n"+
-			"	}\n" +
-			"	//#endregion " + "\"" + "Modifiers" + "\"" + "\n" +
-			"	\n" +
 			"	function getRoles() public view returns( string[] memory, address[] memory){\n" +
 			"		uint c = roleList.length;\n" +
 			"    	string[] memory allRoles = new string[](c);\n" +
@@ -265,7 +248,7 @@ public class Choreography_optimized {
 				"	}\n" +
 				"	\n";
 		}
-		return intro + constr + other;
+		return intro + startSC + other;
 	}
 
 	private String lastFunctions() {
@@ -279,25 +262,9 @@ public class Choreography_optimized {
 			"	}\n" +
 			"	\n"+
 			"	function done(uint elementNum) internal {\n" +
-			"		if(ok){\n" +
-			"			elements[elementNum].status=State.DONE;\n" +
-			"			emit functionDone(elements[elementNum].ID);\n" +
-			"			ok = false;\n" +
-			"		}\n" +
+			"		elements[elementNum].status=State.DONE;\n" +
 			"	}\n" +
-			"   \n" +
-			"	function funcForOk(bool param) public {\n" +
-			"		ok = param;\n" +
-			"	}\n" +
-			"	\n"+
-			"	function getCurrentState()public view  returns(Element[" + (elementsID.size()+1) + "] memory, StateMemory memory){\n" +
-			"		return (elements, currentMemory);\n" + 
-			"	}\n" + 
-			"	\n" +
-			"	function compareStrings (string memory a, string memory b) internal pure returns (bool) {\n" +
-			"		return keccak256(abi.encode(a)) == keccak256(abi.encode(b));\n" + 
-			"	}\n" +
-			"}";
+			"   \n";
 
 		return descr;
 	}
@@ -311,11 +278,11 @@ public class Choreography_optimized {
 		bChor.close();
 	}
 
-	private  void fileFireFly(String b, String fileName) throws IOException, Exception {
+	private  void fileFireFly(String a, String fileName) throws IOException, Exception {
 		FileWriter wChor = new FileWriter(new File(ContractFunctions.projectPath + File.separator + "resources"
 				+ File.separator + ContractFunctions.parseName(fileName, ".ts")));
 		BufferedWriter bChor = new BufferedWriter(wChor);
-		bChor.write(b);
+		bChor.write(a);
 		bChor.flush();
 		bChor.close();
 	}
@@ -428,19 +395,14 @@ public class Choreography_optimized {
 						globalCounter++;
 						taskIdInt.put(next, globalCounter);
 					}
-					int enableInt = taskIdInt.get(next);
 
 					startEventAdd = start.getAttributeValue("id");
 
 					String descr = 
 						"	function " + parseSid(getNextId(start, false)) + "() private {\n" +
 						"		require(elements[" + myNumericID + "].status==State.ENABLED);\n" +
-						"		done(" + myNumericID + ");\n" +
-						"		enable(\"" + next +"\"," + enableInt + ");\n";
-					if (nextNode instanceof Gateway)
-						descr += "		" + parseSid(nextNode.getAttributeValue("id")) + " ();\n	}\n\n";
-					else
-						descr += "	}\n\n";
+						"		funcForOk(" + myNumericID + ");\n";
+					descr += "	}\n\n";
 					choreographyFile = choreographyFile.concat(descr);
 				}
 			}
@@ -579,9 +541,9 @@ public class Choreography_optimized {
 				//tasks.add(node.getAttributeValue("name"));
 				String descr = "	function " + parseSid(getNextId(node, false)) + "() private {\n" +
 						"		require(elements[" + myNumericID +"].status==State.ENABLED);\n" +
-						"		done(" + myNumericID + ");\n";
+						"		funcForOk(" + myNumericID + ");\n";
 				// if the size of incoming nodes is 1 -> flows split
-				if (((ParallelGateway) node).getIncoming().size() == 1) {
+				/*if (((ParallelGateway) node).getIncoming().size() == 1) {
 					for (SequenceFlow outgoing : ((ParallelGateway) node).getOutgoing()) {
 						ModelElementInstance nextElement = modelInstance
 								.getModelElementById(outgoing.getAttributeValue("targetRef"));
@@ -593,9 +555,6 @@ public class Choreography_optimized {
 							globalCounter++;
 							taskIdInt.put(next, globalCounter);
 						}
-						int enableInt = taskIdInt.get(next);
-
-						descr += "		enable(\"" + next +  "\", " + enableInt + ");\n";
 						if (nextElement instanceof Gateway || nextElement instanceof EndEvent) {
 							descr += "		" + parseSid(getNextId(nextElement, false)) + "(); \n";
 						}
@@ -647,7 +606,9 @@ public class Choreography_optimized {
 						descr += "		}\n" + "	}\n\n";
 						choreographyFile += descr;
 					}
-				}
+				}*/
+				descr += "	}\n\n";
+				choreographyFile += descr;
 			} else if (node instanceof EndEvent && !nodeSet.contains(getNextId(node, false))) {
 				if (node.getAttributeValue("name") == null) {
 					node.setAttributeValue("name", "endEvent_" + endEventCounter);
@@ -669,7 +630,7 @@ public class Choreography_optimized {
 				String descr = 
 					"	function " + parseSid(getNextId(node, false)) + "() private {\n" +
 					"		require(elements[" + myNumericID + "].status==State.ENABLED);\n" +
-					"		done(" + myNumericID + ");\n" + "	}\n\n";
+					"		funcForOk(" + myNumericID + ");\n" + "	}\n\n";
 				choreographyFile += descr;
 			} 
 			else if (node instanceof ModelElementInstanceImpl && !(node instanceof EndEvent)
@@ -722,15 +683,16 @@ public class Choreography_optimized {
 				// da cambiare se funziona, levare 'if-else
 				if (task.getType() == ChoreographyTask.TaskType.ONEWAY) {
 					taskNull = false;
-					String pName = getRoleWithModifyer(participantName, optionalRoles, mandatoryRoles);
 					String roleListElement = getRole(participantName, optionalRoles, mandatoryRoles);
 
-					descr += "	function " + parseSid(getNextId(node, false)) + addMemory(getPrameters(request))
-							+ " public " + pName + ") {\n";
-					descr += "		emit messageMustSend(" +  roleListElement + ");\n" +  
-							"		require(elements[" + myNumericID + "].status==State.ENABLED);\n" +
-							"		done(" + myNumericID + ");\n" +
-							"		" + addToMemory(request) + eventBlock;
+					descr += "	function " + parseSid(getNextId(node, false)) + "() public {\n";
+					if(request.contains("<<payment>>")){
+						descr += "		emit tokenMustSend" + participantName + "(msg.sender, " +  roleListElement + ");\n"; 
+					}
+					else{
+						descr += "		emit messageMustSend" + participantName + "(msg.sender, " +  roleListElement + ");\n"; 
+					}
+					descr += "		require(elements[" + myNumericID + "].status==State.ENABLED);\n";
 
 					addGlobal(request);
 
@@ -814,14 +776,6 @@ public class Choreography_optimized {
 							globalCounter++;
 							taskIdInt.put(next, globalCounter);
 						}
-						int enableInt = taskIdInt.get(next);
-
-						descr += "		enable(\"" + next + "\","+enableInt+");\n";
-						if (nextElement instanceof Gateway || nextElement instanceof EndEvent) {
-							// nextElement = checkType(nextElement);
-							// creates the call to the next function
-							descr += "		" + parseSid(getNextId(nextElement, false)) + "(); \n";
-						}
 						descr += ret;
 						descr += "	}\n\n";
 						choreographyFile += descr;
@@ -831,6 +785,418 @@ public class Choreography_optimized {
 			}
 		}
 		return choreographyFile;
+	}
+
+	public String FuncForOk(List<String> optionalRoles, List<String> mandatoryRoles) {
+		String funcForOk = "	function funcForOk(uint param) public {\n";
+		boolean done = false;
+		// check for all SequenceFlow elements in the BPMN model
+		for (SequenceFlow flow : modelInstance.getModelElementsByType(SequenceFlow.class)) {
+			// node to be processed, created by the target reference of the sequence flow
+			ModelElementInstance node = modelInstance.getModelElementById(flow.getAttributeValue("targetRef"));
+			// node containing the source of the flow, useful to get the start element
+			ModelElementInstance start = modelInstance.getModelElementById(flow.getAttributeValue("sourceRef"));
+			if (start instanceof StartEvent) {
+				// checking and processing all the outgoing nodes
+				String me = start.getAttributeValue("id");
+				nodeSet.add(me);
+
+				mergeMap(start.getAttributeValue("id"), "internal", start.getAttributeValue("name"));
+				roleFortask.add("internal");
+				//tasks.add(start.getAttributeValue("name"));
+
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+
+				for (SequenceFlow outgoing : ((StartEvent) start).getOutgoing()) {
+					ModelElementInstance nextNode = modelInstance
+							.getModelElementById(outgoing.getAttributeValue("targetRef"));
+
+					String next = getNextId(nextNode, false);
+					//counter representing the id of elements in the solidity array
+
+					if(taskIdInt.get(next) == null){
+						globalCounter++;
+						taskIdInt.put(next, globalCounter);
+					}
+					int enableInt = taskIdInt.get(next);
+
+					startEventAdd = start.getAttributeValue("id");
+
+					String descr = 
+						"		if(param == " + myNumericID + "){\n" +
+						"			done(" + myNumericID + ");\n" +
+						"			enable(\"" + next +"\"," + enableInt + ");\n" +
+						"			" + parseSid(nextNode.getAttributeValue("id")) + " ();\n" +
+						"		}\n";
+					funcForOk = funcForOk.concat(descr);
+				}
+			}
+			if (node instanceof ExclusiveGateway) {
+				if (node.getAttributeValue("name") == null) {
+					node.setAttributeValue("name", "exclusiveGateway_" + xorCounter);
+					xorCounter++;
+				}
+
+				//nodeSet.add(getNextId(node, false));
+				String me = parseSid(getNextId(node, false));
+				nodeSet.add(me);
+				//int myNumericID = nodeSet.indexOf(me);
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+
+				mergeMap(start.getAttributeValue("id"), "internal", start.getAttributeValue("name"));
+
+				roleFortask.add("internal");
+
+				mergeMap(getNextId(node, false), "internal", node.getAttributeValue("name"));
+				//tasks.add(node.getAttributeValue("name"));
+
+				String descr = "	function " + parseSid(getNextId(node, false)) + "() private {\n" +
+						"		require(elements[" + myNumericID+ "].status==State.ENABLED);\n" +
+						"		done(" + myNumericID + ");\n";
+				int countIf = 0;
+				for (SequenceFlow outgoing : ((ExclusiveGateway) node).getOutgoing()) {
+
+					ModelElementInstance nextElement = modelInstance
+							.getModelElementById(outgoing.getAttributeValue("targetRef"));
+					String next = getNextId(nextElement, false);
+
+					//counter for representing the id of the element in the solidity array
+					//mapping between the next element and the id in the sol array
+					if(taskIdInt.get(next) == null){
+						globalCounter++;
+						taskIdInt.put(next, globalCounter);
+					}
+					int enableInt = taskIdInt.get(next);
+
+					enableElements.add(next);
+
+					// checking if there are conditions on the next element, conditions are setted
+					// in the name of the sequence flow
+					if (outgoing.getAttributeValue("name") != null) {
+						String condition = "";
+						if(countIf > 0){
+							condition = "		else if";
+						}else{
+							condition = "		if";
+						}
+
+
+						descr += condition +"(" + addCompareString(outgoing.getAttributeValue("name")) + "){\n" +
+								"			enable(\"" + next + "\", " + enableInt + ");\n ";
+						if (nextElement instanceof Gateway || nextElement instanceof EndEvent) {
+							descr += "			" + parseSid(getNextId(nextElement, false)) + "();\n";
+						}
+						descr += "		}\n";
+						countIf++;
+					} else {
+						descr += "		enable(\"" + next + "\", "+ enableInt + "); \n";
+						if (nextElement instanceof Gateway || nextElement instanceof EndEvent) {
+							descr += "		" + parseSid(getNextId(nextElement, false)) + "(); \n";
+						}
+					}
+
+				}
+				descr += "	}\n\n";
+				funcForOk = funcForOk.concat(descr);
+			} else if (node instanceof EventBasedGateway) {
+
+				if (node.getAttributeValue("name") == null) {
+					node.setAttributeValue("name", "eventBasedGateway_" + eventBasedCounter);
+					eventBasedCounter++;
+				}
+				String me = getNextId(node, false);
+				nodeSet.add(me);
+				//int myNumericID = nodeSet.indexOf(me);
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+				mergeMap(start.getAttributeValue("id"), "internal", start.getAttributeValue("name"));
+
+
+				//elementsID.add(getNextId(node, false));
+
+				roleFortask.add("internal");
+				mergeMap(getNextId(node, false), "internal", node.getAttributeValue("name"));
+				//tasks.add(node.getAttributeValue("name"));
+				String descr = "	function " + parseSid(getNextId(node, false)) + "() private {\n" +
+						"		require(elements[" + myNumericID + "].status==State.ENABLED);\n" +
+						"		done(" + myNumericID + ");\n";
+				for (SequenceFlow outgoing : ((EventBasedGateway) node).getOutgoing()) {
+					ModelElementInstance nextElement = modelInstance
+							.getModelElementById(outgoing.getAttributeValue("targetRef"));
+					String next = getNextId(nextElement, false);
+
+					//counter for representing the id of the element in the solidity array
+					//mapping between the next element and the id in the sol array
+					if(taskIdInt.get(next) == null){
+						globalCounter++;
+						taskIdInt.put(next, globalCounter);
+					}
+					int enableInt = taskIdInt.get(next);
+					descr += "		enable(\"" + next +  "\"," + enableInt+"); \n";
+				}
+				descr += "	}\n\n";
+				funcForOk += descr;
+			} else if (node instanceof ParallelGateway) {
+				String me = getNextId(node, false);
+				nodeSet.add(me);
+				//int myNumericID = nodeSet.indexOf(me);
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+
+				roleFortask.add("internal");
+
+				mergeMap(getNextId(node, false), "internal", node.getAttributeValue("name"));
+				//tasks.add(node.getAttributeValue("name"));
+				String descr =
+						"		if(param == " + myNumericID + "){\n" +
+						"			done(" + myNumericID + ");\n";
+				// if the size of incoming nodes is 1 -> flows split
+				if (((ParallelGateway) node).getIncoming().size() == 1) {
+					for (SequenceFlow outgoing : ((ParallelGateway) node).getOutgoing()) {
+						ModelElementInstance nextElement = modelInstance
+								.getModelElementById(outgoing.getAttributeValue("targetRef"));
+						String next = getNextId(nextElement, false);
+						//counter for representing the id of the element in the solidity array
+
+						//mapping between the next element and the id in the sol array
+						if(taskIdInt.get(next) == null){
+							globalCounter++;
+							taskIdInt.put(next, globalCounter);
+						}
+						int enableInt = taskIdInt.get(next);
+
+						descr += "			enable(\"" + next +  "\", " + enableInt + ");\n";
+						descr += "			" + parseSid(getNextId(nextElement, false)) + "(); \n";
+					}
+					descr += "		}\n";
+					funcForOk += descr;
+					// if the size of the outgoing nodes is 1 -> flows converging
+				} else if (((ParallelGateway) node).getOutgoing().size() == 1 && !done) {
+					descr += "			if( ";
+					int lastCounter = 0;
+					for (SequenceFlow incoming : ((ParallelGateway) node).getIncoming()) {
+						lastCounter++;
+						ModelElementInstance prevElement = modelInstance
+								.getModelElementById(incoming.getAttributeValue("sourceRef"));
+						if(taskIdInt.get(getNextId(prevElement, false)) == null){
+							globalCounter++;
+							taskIdInt.put(getNextId(prevElement, false), globalCounter);
+						}
+						int prevNumericID = taskIdInt.get(getNextId(prevElement, false));
+
+						descr += "elements[" + prevNumericID + "].status==State.DONE ";
+
+						if (lastCounter == ((ParallelGateway) node).getIncoming().size()) {
+							descr += "";
+						} else {
+							descr += " && ";
+						}
+					}
+					descr += ") {\n";
+					for (SequenceFlow outgoing : ((ParallelGateway) node).getOutgoing()) {
+						ModelElementInstance nextElement = modelInstance
+								.getModelElementById(outgoing.getAttributeValue("targetRef"));
+						String next = getNextId(nextElement, false);
+						//counter for representing the id of the element in the solidity array
+
+						//mapping between the next element and the id in the sol array
+						if(taskIdInt.get(next) == null){
+							globalCounter++;
+							taskIdInt.put(next, globalCounter);
+						}
+						int enableInt = taskIdInt.get(next);
+
+
+						descr += 
+							"				enable(\"" + next +  "\", " + enableInt + ");\n" +
+							"				" + parseSid(getNextId(nextElement, false)) + "();\n" +
+							"			}\n" + "		}\n";
+						funcForOk += descr;
+					}
+					done = true;
+				}
+			} else if (node instanceof EndEvent) {
+				
+				String me = getNextId(node, false);
+				nodeSet.add(me);
+				//int myNumericID = nodeSet.indexOf(me);
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+
+				roleFortask.add("internal");
+				mergeMap(getNextId(node, false), "internal", node.getAttributeValue("name"));
+				//tasks.add(node.getAttributeValue("name"));
+				String descr = 
+					"		if(param == " + myNumericID + ") {\n" +
+					"			done(" + myNumericID + ");\n" + "		}\n";
+				funcForOk += descr;
+			} 
+			else if (node instanceof ModelElementInstanceImpl && !(node instanceof EndEvent)
+					&& !(node instanceof ParallelGateway) && !(node instanceof ExclusiveGateway)
+					&& !(node instanceof EventBasedGateway)) {
+
+				boolean taskNull = false;
+				String me = getNextId(node, false);
+				nodeSet.add(me);
+				//int myNumericID = nodeSet.indexOf(me);
+				if(taskIdInt.get(me) == null){
+					globalCounter++;
+					taskIdInt.put(me, globalCounter);
+				}
+				int myNumericID = taskIdInt.get(me);
+				request = "";
+				response = "";
+
+				String descr = "";
+				Participant participant = null;
+				String participantName = "";
+				ChoreographyTask task = new ChoreographyTask((ModelElementInstanceImpl) node, modelInstance);
+				getRequestAndResponseForFuncForOk(task);
+
+				participant = modelInstance.getModelElementById(task.getInitialParticipant().getId());
+
+				participantName = participant.getAttributeValue("name");
+
+				String eventBlock = "";
+
+				if (start instanceof EventBasedGateway) {
+					for (SequenceFlow block : ((EventBasedGateway) start).getOutgoing()) {
+						ModelElementInstance nextElement = modelInstance
+								.getModelElementById(block.getAttributeValue("targetRef"));
+						if (!(getNextId(nextElement, false).equals(getNextId(node, false)))) {
+							String prev = getNextId(nextElement, false);
+							nodeSet.add(prev);
+							if(taskIdInt.get(prev) == null){
+								globalCounter++;
+								taskIdInt.put(prev, globalCounter);
+							}
+							int prevNumericID = taskIdInt.get(prev);
+							eventBlock += "disable(" + prevNumericID + ");\n";
+						}
+					}
+				}
+				// if there isn't a response the function created is void
+
+				// da cambiare se funziona, levare 'if-else
+				if (task.getType() == ChoreographyTask.TaskType.ONEWAY) {
+					taskNull = false;
+					descr += 
+						"		if(param == " + myNumericID + ") {\n" +
+						"			done(" + myNumericID + ");\n";
+
+					addGlobal(request);
+
+				} else if (task.getType() == ChoreographyTask.TaskType.TWOWAY) {
+					taskNull = false;
+
+					String pName = getRoleWithModifyer(participantName, optionalRoles, mandatoryRoles);
+					String roleListElement = getRole(participantName, optionalRoles, mandatoryRoles);
+					
+					if (!request.isEmpty()) {
+						
+						String next = getNextId(node, true);
+						//counter for representing the id of the element in the solidity array
+
+						//mapping between the next element and the id in the sol array
+						if(taskIdInt.get(next) == null){
+							globalCounter++;
+							taskIdInt.put(next, globalCounter);
+						}
+						int enableInt = taskIdInt.get(next);
+
+						taskNull = false;
+
+						descr += "	function " + parseSid(getNextId(node, false)) + addMemory(getPrameters(request))
+								+ " public " + pName + "){\n";
+						descr += "		emit messageMustSend(" +  roleListElement + ");\n" + 
+								"		require(elements[" + myNumericID+"].status==State.ENABLED);\n" +
+								"		done(" + myNumericID + ");\n" +
+								"		enable(\"" + next + "\"," + enableInt + ");\n" + 
+								"		" + addToMemory(request) +
+								"		" + eventBlock + "}\n";
+						addGlobal(request);
+					} else {
+						taskNull = true;
+					}
+
+					if (!response.isEmpty()) {
+						String meR = getNextId(node, true);
+						nodeSet.add(meR);
+						//int myNumericIDR = nodeSet.indexOf(meR);
+						if(taskIdInt.get(meR) == null){
+							globalCounter++;
+							taskIdInt.put(me, globalCounter);
+						}
+						int myNumericIDR = taskIdInt.get(meR);
+						
+						taskNull = false;
+						pName = getRoleWithModifyer(task.getParticipantRef().getName(), optionalRoles, mandatoryRoles);
+						roleListElement = getRole(task.getParticipantRef().getName(), optionalRoles, mandatoryRoles);
+						descr += "	function " + parseSid(getNextId(node, true)) + addMemory(getPrameters(response)) +
+								" public " + pName + "){\n";
+						if(request.contains("<<payment>>")){
+							descr +="		emit tokenMustSend(" +  roleListElement + ");\n";
+						}
+						else{
+							descr +="		emit messageMustSend(" +  roleListElement + ");\n";
+						}
+						descr +=
+								"		require(elements[" + myNumericIDR + "].status==State.ENABLED);\n" +
+								"		done(" + myNumericIDR + ");\n" + addToMemory(response) + eventBlock;
+						addGlobal(response);
+					} else {
+						taskNull = true;
+					}
+
+				}
+				funcForOk += descr;
+				descr = "";
+				// checking the outgoing elements from the task
+				if (taskNull == false) {
+					
+					for (SequenceFlow out : task.getOutgoing()) {
+						ModelElementInstance nextElement = modelInstance
+								.getModelElementById(out.getAttributeValue("targetRef"));
+						String next = getNextId(nextElement, false);
+
+						//counter for representing the id of the element in the solidity array
+
+						//mapping between the next element and the id in the sol array
+						if(taskIdInt.get(next) == null){
+							globalCounter++;
+							taskIdInt.put(next, globalCounter);
+						}
+						int enableInt = taskIdInt.get(next);
+
+						descr += 
+							"			enable(\"" + next + "\","+enableInt+");\n" +
+							"			" + parseSid(getNextId(nextElement, false)) + "(); \n";
+						descr += "		}\n";
+						funcForOk += descr;
+
+					}
+				}
+			}
+		}
+		funcForOk += "	}\n" + "}";
+		return funcForOk;
 	}
 
 	public String getRole(String part, List<String> optionalRoles, List<String> mandatoryRoles) {
@@ -924,6 +1290,72 @@ public class Choreography_optimized {
 			if (responseMessage.getAttributeValue("name") != null) {
 				
 				elementsID.add(responseMessage.getId());
+				response = responseMessage.getAttributeValue("name");
+				//tasks.add(response);
+				roleFortask.add(task.getParticipantRef().getName());
+				mergeMap(responseMessage.getId(), task.getParticipantRef().getName(), response);
+			}
+
+		}
+
+	}
+
+	public void getRequestAndResponseForFuncForOk(ChoreographyTask task) {
+		// if there is only the response
+		Participant participant = modelInstance.getModelElementById(task.getInitialParticipant().getId());
+		String participantName = participant.getAttributeValue("name");
+
+		if (task.getRequest() == null && task.getResponse() != null) {
+			// System.out.println("task.getRequest() = null: " + task.getRequest());
+			MessageFlow responseMessageFlowRef = task.getResponse();
+			MessageFlow responseMessageFlow = modelInstance.getModelElementById(responseMessageFlowRef.getId());
+			Message responseMessage = modelInstance
+					.getModelElementById(responseMessageFlow.getAttributeValue("messageRef"));
+
+			if (!responseMessage.getAttributeValue("name").isEmpty()) {
+				//elementsID.add(responseMessage.getId());
+				response = responseMessage.getAttributeValue("name");
+				//tasks.add(response);
+				roleFortask.add(task.getParticipantRef().getName());
+				mergeMap(responseMessage.getId(), task.getParticipantRef().getName(), response);
+			}
+
+		}
+		// if there is only the request
+		else if (task.getRequest() != null && task.getResponse() == null) {
+			MessageFlow requestMessageFlowRef = task.getRequest();
+			MessageFlow requestMessageFlow = modelInstance.getModelElementById(requestMessageFlowRef.getId());
+			Message requestMessage = modelInstance
+					.getModelElementById(requestMessageFlow.getAttributeValue("messageRef"));
+			if (!requestMessage.getAttributeValue("name").isEmpty()) {
+				//elementsID.add(requestMessage.getId());
+				request = requestMessage.getAttributeValue("name");
+				//tasks.add(request);
+				roleFortask.add(participantName);
+				mergeMap(requestMessage.getId(), participantName, request);
+			}
+
+		}
+		// if there are both
+		else {
+			MessageFlow requestMessageFlowRef = task.getRequest();
+			MessageFlow responseMessageFlowRef = task.getResponse();
+			MessageFlow requestMessageFlow = modelInstance.getModelElementById(requestMessageFlowRef.getId());
+			MessageFlow responseMessageFlow = modelInstance.getModelElementById(responseMessageFlowRef.getId());
+			Message requestMessage = modelInstance
+					.getModelElementById(requestMessageFlow.getAttributeValue("messageRef"));
+			Message responseMessage = modelInstance
+					.getModelElementById(responseMessageFlow.getAttributeValue("messageRef"));
+			if (requestMessage.getAttributeValue("name") != null) {
+				//elementsID.add(requestMessage.getId());
+				request = requestMessage.getAttributeValue("name");
+				//tasks.add(request);
+				roleFortask.add(participantName);
+				mergeMap(requestMessage.getId(), participantName, request);
+			}
+			if (responseMessage.getAttributeValue("name") != null) {
+				
+				//elementsID.add(responseMessage.getId());
 				response = responseMessage.getAttributeValue("name");
 				//tasks.add(response);
 				roleFortask.add(task.getParticipantRef().getName());
@@ -1072,6 +1504,70 @@ public class Choreography_optimized {
 			"	}\n" +
 			"}\n" +
 			"//#endregion " + "\"" + "Message sending" + "\"\n\n" +
+			"//#region " + "\"" + "Token handling" + "\"\n" +
+			"async function createPool(poolName: string, fungability:" + "\"" + "fungible" + "\"" + " | " + "\"" + "nonfungible" + "\"" + " |  undefined){\n" +
+			"	var pools = await firefly.getTokenPools()\n" +
+			"	var existingPool = false\n"+
+			"	for(var i = 0; i < pools.length; i++){\n" +
+			"		if(pools[i].name == poolName){\n" +
+			"			existingPool = true;\n" +
+			"			break;\n" +
+			"		}\n" +
+			"	}\n" +
+			"	if(existingPool){\n" +
+			"		console.log('Token pool with this name is already existing')\n" +
+			"	}\n" +
+			"	else{\n" +
+			"		console.log('Token pool doesnt exist - creating now');\n" +
+			"		await firefly.createTokenPool({\n" +
+			"			name: poolName,\n" +
+			"			type: fungability,\n" +
+			"		});\n" +
+			"	}\n" +
+			"}\n\n" +
+			"async function getBalance(key: string): Promise<number>{\n" +
+			"	var balance: number = 0;\n" +
+			"	var tokens = await firefly.getTokenBalances();\n" +
+			"	for(var i = 0; i < tokens.length; i++){\n" +
+			"		if(tokens[i].key == key && tokens[i].balance != '0'){\n" +
+			"			balance += 1;\n" +
+			"		}\n" +
+			"	}\n" +
+			"	return balance;\n" +
+			"}\n\n" +
+			"async function getTokensById(key: string, randomNumbers: number[]): Promise<number[]> {\n" +
+			"	var tokenIdArray: number[] = [];\n" +
+			"	var tokens = await firefly.getTokenBalances();\n" +
+			"	for(var i = tokens.length - 1; i >=0; i--){\n" +
+			"		if(tokens[i].key == key && tokens[i].balance != '0'){\n" +
+			"			tokenIdArray.push(Number(tokens[i].tokenIndex));\n" +
+			"		}\n" +
+			"	}\n" +
+			"	return tokenIdArray;\n" +
+			"}\n\n" +
+			"async function mintToken(pool: string, num: string){\n" +
+			"	await firefly.mintTokens({\n" +
+			"		pool: pool,\n" +
+			"		amount: '1',\n" +
+			"		tokenIndex: num\n" +
+			"	});\n" +
+			"}\n\n" +
+			"async function transferToken(pool: string, key: string, tokenId: string){\n" +
+			"	 await firefly.transferTokens({\n" +
+			"		pool: pool,\n" +
+			"		to: key,\n" +
+			"		amount: '1',\n" +
+			"		tokenIndex: tokenId,\n" +
+			"	});\n" +
+			"}\n\n" +
+			"async function burnToken(pool: string, tokenId: string){\n" +
+			"	 await firefly.burnTokens({\n" +
+			"		pool: pool,\n" +
+			"		amount: '1',\n" +
+			"		tokenIndex: tokenId,\n" +
+			"	});\n" +
+			"}\n" +
+			"//#endregion " + "\"" + "Token handling" + "\"\n\n" +
 			"//#region " + "\"" + "smartContract functions" + "\"\n" +
 			"async function defineContractInterface(name: string, version: string, schema: string[]){\n" +
 			"	const ffi = await firefly.generateContractInterface({\n" +
@@ -1107,6 +1603,22 @@ public class Choreography_optimized {
 			"			}\n" +
 			"		},\n" +
 			"	);\n" +
+			"}\n\n" +
+			"async function createSubscription(address: string, sc_api_name: string){\n" +
+			"	await firefly.replaceSubscription({\n" +
+			"		filter: {\n" +
+			"			events: 'blockchain_event_received',\n" +
+			"			blockchainevent: {\n" +
+			"				listener: address\n" +
+			"			}\n" +
+			"		},\n" +
+			"		name: sc_api_name,\n" +
+			"		namespace: 'default',\n" +
+			"		options: {\n" +
+			"			firstEvent: 'newest'\n" +
+			"		},\n" +
+			"		transport: 'websockets'\n" +
+			"	});\n" +
 			"}\n\n" +
 			"async function invokSmartContract(contractApiName: string, funcForOk: string){\n" +
 			"	await firefly.invokeContractAPI(\n" +
